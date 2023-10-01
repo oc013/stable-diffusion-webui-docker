@@ -14,15 +14,23 @@ RUN . /clone.sh k-diffusion https://github.com/crowsonkb/k-diffusion.git ab527a9
 RUN . /clone.sh clip-interrogator https://github.com/pharmapsychotic/clip-interrogator 2cf03aaf6e704197fd0dae7c7f96aa59cf1b11c9
 RUN . /clone.sh generative-models https://github.com/Stability-AI/generative-models 45c443b316737a4ab6e40413d7794a7f5657c19f
 
-
-FROM alpine:3.17 as xformers
-RUN apk add --no-cache aria2
-RUN aria2c -x 5 --dir / --out wheel.whl 'https://github.com/AbdBarho/stable-diffusion-webui-docker/releases/download/6.0.0/xformers-0.0.21.dev544-cp310-cp310-manylinux2014_x86_64-pytorch201.whl'
-
+# FROM alpine:3.17 as xformers
+# RUN apk add --no-cache aria2
+# RUN aria2c -x 5 --dir / --out wheel.whl 'https://github.com/AbdBarho/stable-diffusion-webui-docker/releases/download/6.0.0/xformers-0.0.21.dev544-cp310-cp310-manylinux2014_x86_64-pytorch201.whl'
 
 FROM python:3.10.9-slim
+ARG USERNAME=sdwebui
+ARG UID=1000
+ARG GID=1000
+
+SHELL ["/bin/bash", "-ceuxo", "pipefail"]
 
 ENV DEBIAN_FRONTEND=noninteractive PIP_PREFER_BINARY=1
+ENV ROOT=/home/${USERNAME}/stable-diffusion-webui
+
+# RUN PIP_NO_CACHE_DIR=1 pip install torch==1.13.1+cu117 torchvision --extra-index-url https://download.pytorch.org/whl/cu117
+# RUN PIP_NO_CACHE_DIR=1 pip install torch==2.0.0+cu118 torchvision==0.15.1+cu118 --extra-index-url https://download.pytorch.org/whl/cu118 -U
+# RUN apt-get update && apt install fonts-dejavu-core rsync git jq moreutils sudo -y && apt-get clean
 
 RUN --mount=type=cache,target=/var/cache/apt \
   apt-get update && \
@@ -31,30 +39,38 @@ RUN --mount=type=cache,target=/var/cache/apt \
   # extensions needs those
   ffmpeg libglfw3-dev libgles2-mesa-dev pkg-config libcairo2 libcairo2-dev build-essential
 
-
 RUN --mount=type=cache,target=/cache --mount=type=cache,target=/root/.cache/pip \
   aria2c -x 5 --dir /cache --out torch-2.0.1-cp310-cp310-linux_x86_64.whl -c \
   https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp310-cp310-linux_x86_64.whl && \
   pip install /cache/torch-2.0.1-cp310-cp310-linux_x86_64.whl torchvision --index-url https://download.pytorch.org/whl/cu118
 
+RUN apt-get install -y sudo && \
+    groupadd -g ${GID} ${USERNAME}; useradd --uid ${UID} --gid ${GID} -m ${USERNAME} && \
+    echo "${USERNAME} ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/user && \
+    chmod 0440 /etc/sudoers.d/user && \
+    chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
+
+ENV PATH=$PATH:/home/${USERNAME}/.local/bin
+
+USER ${USERNAME}
 
 RUN --mount=type=cache,target=/root/.cache/pip \
   git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git && \
   cd stable-diffusion-webui && \
-  git reset --hard 5ef669de080814067961f28357256e8fe27544f4 && \
+  # git reset --hard 20ae71faa8ef035c31aa3a410b707d792c8203a3 && \
   pip install -r requirements_versions.txt
 
-RUN --mount=type=cache,target=/root/.cache/pip  \
-  --mount=type=bind,from=xformers,source=/wheel.whl,target=/xformers-0.0.21.dev544-cp310-cp310-manylinux2014_x86_64.whl \
-  pip install /xformers-0.0.21.dev544-cp310-cp310-manylinux2014_x86_64.whl
-
-ENV ROOT=/stable-diffusion-webui
-
+# RUN --mount=type=cache,target=/root/.cache/pip  \
+#   --mount=type=bind,from=xformers,source=/wheel.whl,target=/xformers-0.0.21.dev544-cp310-cp310-manylinux2014_x86_64.whl \
+#   pip install /xformers-0.0.21.dev544-cp310-cp310-manylinux2014_x86_64.whl
 
 COPY --from=download /repositories/ ${ROOT}/repositories/
 RUN mkdir ${ROOT}/interrogate && cp ${ROOT}/repositories/clip-interrogator/clip_interrogator/data/* ${ROOT}/interrogate
 RUN --mount=type=cache,target=/root/.cache/pip \
   pip install -r ${ROOT}/repositories/CodeFormer/requirements.txt
+
+# Override what's in requirements
+# RUN PIP_NO_CACHE_DIR=1 pip install torch==2.0.0+cu118 torchvision==0.15.1+cu118 --extra-index-url https://download.pytorch.org/whl/cu118 -U
 
 RUN --mount=type=cache,target=/root/.cache/pip \
   pip install pyngrok \
@@ -67,23 +83,27 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # instead, update the repo state in a later step
 
 # TODO: either remove if fixed in A1111 (unlikely) or move to the top with other apt stuff
-RUN apt-get -y install libgoogle-perftools-dev && apt-get clean
-ENV LD_PRELOAD=libtcmalloc.so
+RUN sudo apt-get -y install libgoogle-perftools-dev && sudo apt-get clean
+ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libtcmalloc.so
 
-ARG SHA=5ef669de080814067961f28357256e8fe27544f4
+# ARG SHA=c9c8485bc1e8720aba70f029d25cba1c4abf2b5c
 RUN --mount=type=cache,target=/root/.cache/pip \
   cd stable-diffusion-webui && \
   git fetch && \
-  git reset --hard ${SHA} && \
+  # git reset --hard ${SHA} && \
+  git reset --hard origin/master && \
   pip install -r requirements_versions.txt
+
+# RUN --mount=type=cache,target=/root/.cache/pip  pip install -U opencv-python-headless
 
 COPY . /docker
 
 RUN \
-  python3 /docker/info.py ${ROOT}/modules/ui.py && \
+  # python3 /docker/info.py ${ROOT}/modules/ui.py && \
   mv ${ROOT}/style.css ${ROOT}/user.css && \
   # one of the ugliest hacks I ever wrote \
-  sed -i 's/in_app_dir = .*/in_app_dir = True/g' /usr/local/lib/python3.10/site-packages/gradio/routes.py && \
+  # sed -i 's/in_app_dir = .*/in_app_dir = True/g' /usr/local/lib/python3.10/site-packages/gradio/routes.py && \
+  sed -i 's/in_app_dir = .*/in_app_dir = True/g' /home/${USERNAME}/.local/lib/python3.10/site-packages/gradio/routes.py && \
   git config --global --add safe.directory '*'
 
 WORKDIR ${ROOT}
