@@ -18,7 +18,8 @@ RUN . /clone.sh generative-models https://github.com/Stability-AI/generative-mod
 # RUN apk add --no-cache aria2
 # RUN aria2c -x 5 --dir / --out wheel.whl 'https://github.com/AbdBarho/stable-diffusion-webui-docker/releases/download/6.0.0/xformers-0.0.21.dev544-cp310-cp310-manylinux2014_x86_64-pytorch201.whl'
 
-FROM python:3.10.9-slim
+# FROM python:3.10.9-slim
+FROM pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime
 ARG USERNAME=sdwebui
 ARG UID=1000
 ARG GID=1000
@@ -39,10 +40,10 @@ RUN --mount=type=cache,target=/var/cache/apt \
   # extensions needs those
   ffmpeg libglfw3-dev libgles2-mesa-dev pkg-config libcairo2 libcairo2-dev build-essential
 
-RUN --mount=type=cache,target=/cache --mount=type=cache,target=/root/.cache/pip \
-  aria2c -x 5 --dir /cache --out torch-2.0.1-cp310-cp310-linux_x86_64.whl -c \
-  https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp310-cp310-linux_x86_64.whl && \
-  pip install /cache/torch-2.0.1-cp310-cp310-linux_x86_64.whl torchvision --index-url https://download.pytorch.org/whl/cu118
+# RUN --mount=type=cache,target=/cache --mount=type=cache,target=/root/.cache/pip \
+#   aria2c -x 5 --dir /cache --out torch-2.0.1-cp310-cp310-linux_x86_64.whl -c \
+#   https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp310-cp310-linux_x86_64.whl && \
+#   pip install /cache/torch-2.0.1-cp310-cp310-linux_x86_64.whl torchvision --index-url https://download.pytorch.org/whl/cu118
 
 RUN apt-get install -y sudo && \
     groupadd -g ${GID} ${USERNAME}; useradd --uid ${UID} --gid ${GID} -m ${USERNAME} && \
@@ -51,6 +52,7 @@ RUN apt-get install -y sudo && \
     chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
 
 ENV PATH=$PATH:/home/${USERNAME}/.local/bin
+ENV ROOT=/stable-diffusion-webui
 
 USER ${USERNAME}
 
@@ -64,6 +66,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 #   --mount=type=bind,from=xformers,source=/wheel.whl,target=/xformers-0.0.21.dev544-cp310-cp310-manylinux2014_x86_64.whl \
 #   pip install /xformers-0.0.21.dev544-cp310-cp310-manylinux2014_x86_64.whl
 
+
 COPY --from=download /repositories/ ${ROOT}/repositories/
 RUN mkdir ${ROOT}/interrogate && cp ${ROOT}/repositories/clip-interrogator/clip_interrogator/data/* ${ROOT}/interrogate
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -73,18 +76,20 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # RUN PIP_NO_CACHE_DIR=1 pip install torch==2.0.0+cu118 torchvision==0.15.1+cu118 --extra-index-url https://download.pytorch.org/whl/cu118 -U
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-  pip install pyngrok \
+  pip install pyngrok xformers==0.0.23.post1 \
   git+https://github.com/TencentARC/GFPGAN.git@8d2447a2d918f8eba5a4a01463fd48e45126a379 \
   git+https://github.com/openai/CLIP.git@d50d76daa670286dd6cacf3bcd80b5e4823fc8e1 \
-  git+https://github.com/mlfoundations/open_clip.git@bb6e834e9c70d9c27d0dc3ecedeebeaeb1ffad6b
-
+  git+https://github.com/mlfoundations/open_clip.git@v2.20.0
 
 # Note: don't update the sha of previous versions because the install will take forever
 # instead, update the repo state in a later step
 
 # TODO: either remove if fixed in A1111 (unlikely) or move to the top with other apt stuff
+# there seems to be a memory leak (or maybe just memory not being freed fast enough) that is fixed by this version of malloc
+# maybe move this up to the dependencies list.
 RUN sudo apt-get -y install libgoogle-perftools-dev && sudo apt-get clean
 ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libtcmalloc.so
+# ENV LD_PRELOAD=libtcmalloc.so
 
 # ARG SHA=c9c8485bc1e8720aba70f029d25cba1c4abf2b5c
 RUN --mount=type=cache,target=/root/.cache/pip \
